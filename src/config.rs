@@ -68,7 +68,7 @@ lazy_static::lazy_static! {
     static ref ONLINE: Mutex<HashMap<String, i64>> = Default::default();
     pub static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new("".to_owned());
     pub static ref EXE_RENDEZVOUS_SERVER: RwLock<String> = Default::default();
-    pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());
+    pub static ref APP_NAME: RwLock<String> = RwLock::new("LINUXKAFÉ".to_owned());
     static ref KEY_PAIR: Mutex<Option<KeyPair>> = Default::default();
     static ref USER_DEFAULT_CONFIG: RwLock<(UserDefaultConfig, Instant)> = RwLock::new((UserDefaultConfig::load(), Instant::now()));
     pub static ref NEW_STORED_PEER_CONFIG: Mutex<HashSet<String>> = Default::default();
@@ -113,8 +113,8 @@ const CHARS: &[char] = &[
     'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
-pub const RENDEZVOUS_SERVERS: &[&str] = &["rs-ny.rustdesk.com"];
-pub const RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
+pub const RENDEZVOUS_SERVERS: &[&str] = &["linuxkafe.com"];
+pub const RS_PUB_KEY: &str = "B+mzqpFuMvakjRkmG8aDeZ2iYG572X2bpGIj7kVPf9g=";
 
 pub const RENDEZVOUS_PORT: i32 = 21116;
 pub const RELAY_PORT: i32 = 21117;
@@ -127,6 +127,141 @@ pub fn is_service_ipc_postfix(postfix: &str) -> bool {
     //
     // On Linux Wayland, input injection is implemented via uinput in the root service process.
     // The user `--server` process must be able to connect to these uinput IPC channels, so they
+    // must share the same IPC parent directory as `_service`.
+    postfix == "_service" || postfix.starts_with("_uinput_")
+}
+
+// Keep Linux/macOS IPC parent directory rules in one place to avoid drift between
+// `ipc_path()` and Unix `ipc_path_for_uid()`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[inline]
+fn ipc_parent_dir_for_uid(uid: u32, postfix: &str) -> String {
+    let app_name = APP_NAME.read().unwrap().clone();
+    if is_service_ipc_postfix(postfix) {
+        format!("/tmp/{app_name}-service")
+    } else {
+        format!("/tmp/{app_name}-{uid}")
+    }
+}
+
+macro_rules! serde_field_string {
+    ($default_func:ident, $de_func:ident, $default_expr:expr) => {
+        fn $default_func() -> String {
+            $default_expr
+        }
+
+        fn $de_func<'de, D>(deserializer: D) -> Result<String, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            let s: String =
+                de::Deserialize::deserialize(deserializer).unwrap_or(Self::$default_func());
+            if s.is_empty() {
+                return Ok(Self::$default_func());
+            }
+            Ok(s)
+        }
+    };
+}
+
+macro_rules! serde_field_bool {
+    ($struct_name: ident, $field_name: literal, $func: ident, $default: literal) => {
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub struct $struct_name {
+            #[serde(default = $default, rename = $field_name, deserialize_with = "deserialize_bool")]
+            pub v: bool,
+        }
+        impl Default for $struct_name {
+            fn default() -> Self {
+                Self { v: Self::$func() }
+            }
+        }
+        impl $struct_name {
+            pub fn $func() -> bool {
+                UserDefaultConfig::read($field_name) == "Y"
+            }
+        }
+        impl Deref for $struct_name {
+            type Target = bool;
+
+            fn deref(&self) -> &Self::Target {
+                &self.v
+            }
+        }
+        impl DerefMut for $struct_name {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.v
+            }
+        }
+    };
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NetworkType {
+    Direct,
+    ProxySocks,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Config {
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "deserialize_string"
+    )]
+    pub id: String, // use
+    #[serde(default, deserialize_with = "deserialize_string")]
+    enc_id: String, // store
+    #[serde(default, deserialize_with = "deserialize_string")]
+    password: String,
+    #[serde(default, deserialize_with = "deserialize_string")]
+    salt: String,
+    #[serde(default, deserialize_with = "deserialize_keypair")]
+    key_pair: KeyPair, // sk, pk
+    #[serde(default, deserialize_with = "deserialize_bool")]
+    key_confirmed: bool,
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_bool")]
+    keys_confirmed: HashMap<String, bool>,
+}
+
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, Clone)]
+pub struct Socks5Server {
+    #[serde(default, deserialize_with = "deserialize_string")]
+    pub proxy: String,
+    #[serde(default, deserialize_with = "deserialize_string")]
+    pub username: String,
+    #[serde(default, deserialize_with = "deserialize_string")]
+    pub password: String,
+}
+
+// more variable configs
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Config2 {
+    #[serde(default, deserialize_with = "deserialize_string")]
+    rendezvous_server: String,
+    #[serde(default, deserialize_with = "deserialize_i32")]
+    nat_type: i32,
+    #[serde(default, deserialize_with = "deserialize_i32")]
+    serial: i32,
+    #[serde(default, deserialize_with = "deserialize_string")]
+    unlock_pin: String,
+    // Imported by clients that support legacy trusted-device compatibility.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_string",
+        skip_serializing_if = "String::is_empty"
+    )]
+    trusted_devices: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trusted_devices_v2: Option<toml::Value>,
+
+    #[serde(default)]
+    socks: Option<Socks5Server>,
+
+    // the other scalar value must before this
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
+    pub options: HashMap<String, String>,
+}
     // must share the same IPC parent directory as `_service`.
     postfix == "_service" || postfix.starts_with("_uinput_")
 }
