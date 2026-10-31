@@ -196,7 +196,7 @@ macro_rules! serde_field_bool {
     };
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum NetworkType {
     Direct,
     ProxySocks,
@@ -314,7 +314,7 @@ macro_rules! serde_field_bool {
     };
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Resolution {
     pub w: i32,
     pub h: i32,
