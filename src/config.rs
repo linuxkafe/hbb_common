@@ -262,23 +262,6 @@ pub struct Config2 {
     #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     pub options: HashMap<String, String>,
 }
-    // must share the same IPC parent directory as `_service`.
-    postfix == "_service" || postfix.starts_with("_uinput_")
-}
-
-// Keep Linux/macOS IPC parent directory rules in one place to avoid drift between
-// `ipc_path()` and Unix `ipc_path_for_uid()`.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[inline]
-fn ipc_parent_dir_for_uid(uid: u32, postfix: &str) -> String {
-    let app_name = APP_NAME.read().unwrap().clone();
-    if is_service_ipc_postfix(postfix) {
-        format!("/tmp/{app_name}-service")
-    } else {
-        format!("/tmp/{app_name}-{uid}")
-    }
-}
-
 macro_rules! serde_field_string {
     ($default_func:ident, $de_func:ident, $default_expr:expr) => {
         fn $default_func() -> String {
